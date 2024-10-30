@@ -21,6 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class ContainerCreateRequest(BaseModel):
     image: str
     name: str
@@ -34,7 +35,7 @@ async def create_container(request: ContainerCreateRequest):
         )
         return JSONResponse(content={"id": container.id})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
 
 
 @app.get("/containers/{container_id}")
@@ -43,7 +44,7 @@ async def get_container(container_id: str):
         container = docker_client.containers.get(container_id)
         return JSONResponse(content={"id": container.id, "status": container.status})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
 
 
 @app.delete("/containers/{container_id}")
@@ -53,7 +54,7 @@ async def delete_container(container_id: str):
         container.remove(force=True)
         return JSONResponse(content={"id": container_id, "status": "deleted"})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
 
 
 @app.post("/containers/{container_id}/start")
@@ -63,7 +64,7 @@ async def start_container(container_id: str):
         container.start()
         return JSONResponse(content={"id": container_id, "status": container.status})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
 
 
 @app.post("/containers/{container_id}/stop")
@@ -73,4 +74,4 @@ async def stop_container(container_id: str):
         container.stop()
         return JSONResponse(content={"id": container_id, "status": container.status})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
