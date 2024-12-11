@@ -1,8 +1,12 @@
+import asyncio
+import sys, os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from docker import DockerClient
 from pydantic import BaseModel
+
+from rabbitmq import consume_build_queue, rabbitmq_connection
 
 app = FastAPI()
 docker_client = DockerClient()
@@ -30,6 +34,7 @@ class ContainerCreateRequest(BaseModel):
 @app.post("/containers")
 async def create_container(request: ContainerCreateRequest):
     try:
+        docker_client.images.pull(request.image)
         container = docker_client.containers.create(
             request.image, name=request.name, ports={"3000/tcp": 3000}
         )
@@ -75,3 +80,22 @@ async def stop_container(container_id: str):
         return JSONResponse(content={"id": container_id, "status": container.status})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
+
+
+def main():
+    try:
+        connection = rabbitmq_connection()
+        channel = connection.channel()
+        print("[*] Waiting for rabbitmq messages...")
+        channel.start_consuming()
+        consume_build_queue(channel)
+    except KeyboardInterrupt:
+        print("Program interrupted. Exiting...")
+        try:
+            sys.exit(0)
+        except SystemExit:
+            os._exit(0)
+
+
+if __name__ == "__main__": 
+    main()
