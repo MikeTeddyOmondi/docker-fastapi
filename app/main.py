@@ -1,9 +1,11 @@
 import asyncio
 import sys, os
+import aio_pika
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from docker import DockerClient
+from pika import BlockingConnection
 from pydantic import BaseModel
 
 from rabbitmq import consume_build_queue, rabbitmq_connection
@@ -82,20 +84,24 @@ async def stop_container(container_id: str):
         raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
 
 
-def main():
-    try:
-        connection = rabbitmq_connection()
-        channel = connection.channel()
-        print("[*] Waiting for rabbitmq messages...")
-        channel.start_consuming()
-        consume_build_queue(channel)
-    except KeyboardInterrupt:
-        print("Program interrupted. Exiting...")
-        try:
-            sys.exit(0)
-        except SystemExit:
-            os._exit(0)
+# async def main(connection: aio_pika.RobustConnection):
+#     try:
+#         await consume_build_queue(connection) 
+#         print("[*] Waiting for RabbitMQ messages...")
+#     except KeyboardInterrupt:
+#         print("Program interrupted. Exiting...")
+#         try:
+#             sys.exit(0)
+#         except SystemExit:
+#             os._exit(0)
+#     finally:
+#         connection.close()
+#         print("[*] RabbitMQ connection closed.")
 
 
-if __name__ == "__main__": 
-    main()
+# if __name__ == "__main__": 
+#     loop = asyncio.get_event_loop()
+#     # main(connection)
+#     connection = rabbitmq_connection(loop)
+#     loop.run_until_complete(main(connection))
+#     loop.close()
