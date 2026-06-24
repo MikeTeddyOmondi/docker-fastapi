@@ -20,17 +20,17 @@ settings = get_settings()
 # back to from_env(), which honours DOCKER_HOST/DOCKER_TLS_VERIFY/DOCKER_CERT_PATH
 # in the process environment and finally the default unix socket. Either way the
 # same image works against the default socket, Colima, or a remote daemon.
-_client: DockerClient | None = None
+docker_client: DockerClient | None = None
 
 
 def get_client() -> DockerClient:
-    global _client
-    if _client is None:
+    global docker_client
+    if docker_client is None:
         if settings.docker_host:
-            _client = DockerClient(base_url=settings.docker_host)
+            docker_client = DockerClient(base_url=settings.docker_host)
         else:
-            _client = DockerClient.from_env()
-    return _client
+            docker_client = DockerClient.from_env()
+    return docker_client
 
 
 # --------------------------------------------------------------------------- #
