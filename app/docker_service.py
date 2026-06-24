@@ -16,15 +16,20 @@ settings = get_settings()
 
 # The client is created lazily on first use rather than at import time, so the
 # module (and the whole app) can be imported and unit-tested without a running
-# daemon. from_env() honours DOCKER_HOST / DOCKER_TLS_VERIFY / DOCKER_CERT_PATH,
-# so the same image works against the default socket, Colima, or a remote host.
+# daemon. An explicit DOCKER_HOST (from settings/.env) wins; otherwise we fall
+# back to from_env(), which honours DOCKER_HOST/DOCKER_TLS_VERIFY/DOCKER_CERT_PATH
+# in the process environment and finally the default unix socket. Either way the
+# same image works against the default socket, Colima, or a remote daemon.
 _client: DockerClient | None = None
 
 
 def get_client() -> DockerClient:
     global _client
     if _client is None:
-        _client = DockerClient.from_env()
+        if settings.docker_host:
+            _client = DockerClient(base_url=settings.docker_host)
+        else:
+            _client = DockerClient.from_env()
     return _client
 
 
