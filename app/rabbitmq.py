@@ -1,97 +1,104 @@
+"""Asynchronous RabbitMQ deploy worker (and a publisher helper).
+
+This is the control-plane -> worker split: instead of the HTTP request doing a
+slow `pull + create + start`, a producer drops a JSON message onto the durable
+``locci-deploy`` queue and this consumer processes it.
+
+Key fixes over the original:
+  * uses ``container.id`` (the original referenced a non-existent
+    ``container.container_id`` and would have raised AttributeError);
+  * runs the blocking docker-py calls via ``asyncio.to_thread`` so they don't
+    freeze the event loop;
+  * acks/rejects explicitly (``requeue=False``) so a poison message is dropped
+    and logged instead of redelivered forever;
+  * degrades gracefully — if the broker is down at startup the API still runs.
+"""
+import asyncio
 import json
-from aio_pika import connect
+import logging
+
 import aio_pika
-import pika
+from aio_pika.abc import AbstractIncomingMessage
 
-# from datetime import datetime
-from docker import DockerClient
+from . import db
+from . import docker_service as docker
+from .config import get_settings
 
-docker_client = DockerClient()
+settings = get_settings()
+logger = logging.getLogger("docker_api.rabbitmq")
 
 
-async def consume_build_queue(
-    connection: aio_pika.RobustConnection, 
-    queue_name="locci-deploy"
-):
-    # channel = connection.channel()
-    # channel.queue_declare(queue=queue_name, durable=True)
-
-    # # Perform connection
-    # connection = await connect("amqp://guest:guest@localhost/")
-
-    async with connection:
-        # Creating a channel
-        channel = await connection.channel()
-        channel.set_qos(prefetch_count=1)
-        # Declaring queue
-        queue = await channel.declare_queue(queue_name, durable=True)
-
-        # async with queue.iterator() as queue_iter:
-        #     # Cancel consuming after __aexit__
-        #     async for message in queue_iter:
-        #         async with message.process():
-        #             # print(message.body)
-        #             # if queue.name in message.body.decode():
-        #             #     break
-        #             decodedMsg = json.loads(message.body.decode())
-        #             print("[x] RabbitMQ message received: %r" % decodedMsg)
-        #             docker_client.images.pull(decodedMsg["image"])
-        #             container = docker_client.containers.create(
-        #                 decodedMsg["image"], name=decodedMsg["name"], ports={"3000/tcp": 3000}
-        #             )
-        #             container = docker_client.containers.get(container.container_id)
-        #             container.start()
-        #             break
-
-    def callback(ch, method, properties, body):
-        decodedMsg = json.loads(body.decode())
-        print("[x] RabbitMQ message received: %r" % decodedMsg)
-        # Insert record to database
+async def _handle_message(message: AbstractIncomingMessage) -> None:
+    # On clean exit the message is acked; on an unhandled exception it is
+    # rejected without requeue (no poison-message redelivery loop).
+    async with message.process(requeue=False, ignore_processed=True):
         try:
-            # Pull, create & start the container
-            # docker_client.images.pull(decodedMsg.image)
-            # container = docker_client.containers.create(
-            #     decodedMsg.image, name=decodedMsg.name, ports={"3000/tcp": 3000}
-            # )
-            # container = docker_client.containers.get(container.container_id)
-            # container.start()
+            payload = json.loads(message.body.decode())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            logger.warning("Discarding malformed message: %r", message.body[:200])
+            return
 
-            docker_client.images.pull(decodedMsg["image"])
-            container = docker_client.containers.create(
-                decodedMsg["image"], name=decodedMsg["name"], ports={"3000/tcp": 3000}
-            )
-            container = docker_client.containers.get(container.container_id)
-            container.start()
-            return dict(
-                content={"id": container.container_id, "status": container.status}
-            )
-        except Exception as e:
-            raise Exception(detail=str(e.__dict__["explanation"]))
+        image, name = payload.get("image"), payload.get("name")
+        if not image or not name:
+            logger.warning("Discarding message missing image/name: %s", payload)
+            return
 
-    # channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
-    await queue.consume(on_message=callback, no_ack=True)
+        logger.info("Deploying from queue: image=%s name=%s", image, name)
+        try:
+            result = await asyncio.to_thread(docker.deploy, image, name)
+        except docker.ImageUnavailable:
+            logger.error("Image unavailable, dropping message: %s", image)
+            return
+        except docker.DockerOperationError as e:
+            logger.error("Deploy failed for %s: %s", name, e.message)
+            return
 
-
-def send_build_message(
-    connection: pika.BlockingConnection, body_message: str, queue_name="locci-build"
-):
-    channel = connection.channel()
-    channel.queue_declare(queue=queue_name, durable=True)
-    channel.basic_publish(exchange="", routing_key="/locci-build", body=body_message)
-    print("[x] Sent RabbitMQ message!'")
-    connection.close()
+        await asyncio.to_thread(
+            db.upsert_deployment,
+            id=result["id"],
+            name=result["name"],
+            image=result.get("image", image),
+            status=result["status"],
+            source="queue",
+        )
+        logger.info("Deployed %s (%s)", name, result["id"])
 
 
-async def rabbitmq_connection(loop):
-    # credentials = pika.PlainCredentials("user", "password")
-    # connection = pika.BlockingConnection(
-    #     pika.ConnectionParameters(host="172.17.0.1", port=5672, credentials=credentials)
-    # )
+async def start_consumer():
+    """Connect, start consuming, and return the connection (or None if down)."""
+    try:
+        connection = await aio_pika.connect_robust(settings.rabbitmq_url)
+    except Exception as e:  # broker unreachable at boot
+        logger.warning(
+            "RabbitMQ unavailable (%s); API will run without the deploy queue", e
+        )
+        return None
 
-    # Perform connection
-    # connection = await connect("amqp://guest:guest@localhost/")
-    connection = await aio_pika.connect_robust(
-        "amqp://user:password@127.0.0.1/", loop=loop
-    )
-
+    channel = await connection.channel()
+    await channel.set_qos(prefetch_count=1)
+    queue = await channel.declare_queue(settings.deploy_queue, durable=True)
+    await queue.consume(_handle_message)
+    logger.info("Consuming deploy queue '%s'", settings.deploy_queue)
     return connection
+
+
+async def shutdown_consumer(connection) -> None:
+    if connection is not None:
+        await connection.close()
+        logger.info("RabbitMQ connection closed")
+
+
+async def publish_deploy_message(image: str, name: str) -> None:
+    """Publish a deploy request onto the durable queue."""
+    connection = await aio_pika.connect_robust(settings.rabbitmq_url)
+    async with connection:
+        channel = await connection.channel()
+        await channel.declare_queue(settings.deploy_queue, durable=True)
+        body = json.dumps({"image": image, "name": name}).encode()
+        await channel.default_exchange.publish(
+            aio_pika.Message(
+                body=body, delivery_mode=aio_pika.DeliveryMode.PERSISTENT
+            ),
+            routing_key=settings.deploy_queue,
+        )
+        logger.info("Published deploy message for %s", name)

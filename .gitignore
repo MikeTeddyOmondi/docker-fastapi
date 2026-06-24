@@ -1,2 +1,14 @@
 .venv
 **/*__pycache__
+
+# Environment & secrets
+.env
+
+# SQLite data directory
+data/
+
+# uv lockfile is intentionally committed; build artifacts are not
+*.egg-info/
+
+# Local archives
+*.tar.gz

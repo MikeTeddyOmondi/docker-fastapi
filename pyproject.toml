@@ -1,0 +1,38 @@
+[project]
+name = "docker-control-plane"
+version = "1.0.0"
+description = "FastAPI control plane for Docker with a RabbitMQ deploy worker and SQLite history."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.2",
+    "uvicorn[standard]==0.32.0",
+    "sqlmodel==0.0.22",
+    "pydantic==2.9.2",
+    "pydantic-settings==2.6.1",
+    "docker==7.1.0",
+    "aio-pika==9.5.4",
+    "python-dotenv==1.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+]
+
+# This is an application, not a distributable package: manage the environment
+# but don't try to build/install the project itself.
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "W"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"
