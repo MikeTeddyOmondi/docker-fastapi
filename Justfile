@@ -21,6 +21,16 @@ format:
 check: lint
     uv run ruff format --check .
 
+# --- tests ---
+# Hermetic unit tests (Docker layer stubbed, no daemon needed).
+test:
+    uv run pytest -m "not integration"
+
+# Full suite incl. the live lifecycle test. Point DOCKER_HOST at your daemon,
+# e.g. Colima: just test-integration
+test-integration:
+    DOCKER_HOST="unix://$HOME/.colima/default/docker.sock" uv run pytest
+
 # --- local dev ---
 run:
     uv run uvicorn app.main:app --reload --port 8448

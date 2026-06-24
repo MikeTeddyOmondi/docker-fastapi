@@ -6,6 +6,7 @@ Layering:
 Routes are plain ``def`` (not ``async def``): docker-py is blocking, so running
 in FastAPI's threadpool keeps the event loop free for the RabbitMQ consumer.
 """
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -65,9 +66,9 @@ def create_container(request: ContainerCreateRequest):
     try:
         result = docker.create_container(request.image, request.name)
     except docker.ImageUnavailable as e:
-        raise HTTPException(status_code=404, detail=f"image not found: {e}")
+        raise HTTPException(status_code=404, detail=f"image not found: {e}") from e
     except docker.DockerOperationError as e:
-        raise HTTPException(status_code=500, detail=e.message)
+        raise HTTPException(status_code=500, detail=e.message) from e
 
     db.upsert_deployment(
         id=result["id"],
@@ -84,9 +85,9 @@ def get_container(container_id: str):
     try:
         return docker.get_container(container_id)
     except docker.ContainerNotFound:
-        raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=404, detail="container not found") from None
     except docker.DockerOperationError as e:
-        raise HTTPException(status_code=500, detail=e.message)
+        raise HTTPException(status_code=500, detail=e.message) from e
 
 
 @app.post("/containers/{container_id}/start")
@@ -94,9 +95,9 @@ def start_container(container_id: str):
     try:
         result = docker.start_container(container_id)
     except docker.ContainerNotFound:
-        raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=404, detail="container not found") from None
     except docker.DockerOperationError as e:
-        raise HTTPException(status_code=500, detail=e.message)
+        raise HTTPException(status_code=500, detail=e.message) from e
 
     db.update_status(container_id, result["status"])
     return result
@@ -107,9 +108,9 @@ def stop_container(container_id: str):
     try:
         result = docker.stop_container(container_id)
     except docker.ContainerNotFound:
-        raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=404, detail="container not found") from None
     except docker.DockerOperationError as e:
-        raise HTTPException(status_code=500, detail=e.message)
+        raise HTTPException(status_code=500, detail=e.message) from e
 
     db.update_status(container_id, result["status"])
     return result
@@ -120,9 +121,9 @@ def delete_container(container_id: str):
     try:
         result = docker.delete_container(container_id)
     except docker.ContainerNotFound:
-        raise HTTPException(status_code=404, detail="container not found")
+        raise HTTPException(status_code=404, detail="container not found") from None
     except docker.DockerOperationError as e:
-        raise HTTPException(status_code=500, detail=e.message)
+        raise HTTPException(status_code=500, detail=e.message) from e
 
     db.mark_deleted(container_id)
     return result

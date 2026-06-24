@@ -6,13 +6,26 @@ docker-py exceptions into typed domain errors, and (critically) calls
 ``reload()`` after state-changing operations so the returned status reflects
 the daemon's real state instead of a stale local snapshot.
 """
+
 from docker import DockerClient
 from docker.errors import APIError, ImageNotFound, NotFound
 
 from .config import get_settings
 
 settings = get_settings()
-_client = DockerClient()
+
+# The client is created lazily on first use rather than at import time, so the
+# module (and the whole app) can be imported and unit-tested without a running
+# daemon. from_env() honours DOCKER_HOST / DOCKER_TLS_VERIFY / DOCKER_CERT_PATH,
+# so the same image works against the default socket, Colima, or a remote host.
+_client: DockerClient | None = None
+
+
+def get_client() -> DockerClient:
+    global _client
+    if _client is None:
+        _client = DockerClient.from_env()
+    return _client
 
 
 # --------------------------------------------------------------------------- #
@@ -50,9 +63,9 @@ def _image_tag(container) -> str:
 # --------------------------------------------------------------------------- #
 def ping() -> bool:
     try:
-        return _client.ping()
+        return get_client().ping()
     except APIError as e:
-        raise DockerOperationError(_safe_detail(e))
+        raise DockerOperationError(_safe_detail(e)) from e
 
 
 def list_containers() -> list[dict]:
@@ -63,15 +76,15 @@ def list_containers() -> list[dict]:
             "status": c.status,
             "image": _image_tag(c),
         }
-        for c in _client.containers.list(all=True)
+        for c in get_client().containers.list(all=True)
     ]
 
 
 def create_container(image: str, name: str) -> dict:
     try:
-        _client.images.pull(image)
+        get_client().images.pull(image)
         port = settings.default_container_port
-        container = _client.containers.create(
+        container = get_client().containers.create(
             image, name=name, ports={f"{port}/tcp": port}
         )
         return {
@@ -80,25 +93,25 @@ def create_container(image: str, name: str) -> dict:
             "status": container.status,
             "image": image,
         }
-    except ImageNotFound:
-        raise ImageUnavailable(image)
+    except ImageNotFound as e:
+        raise ImageUnavailable(image) from e
     except APIError as e:
-        raise DockerOperationError(_safe_detail(e))
+        raise DockerOperationError(_safe_detail(e)) from e
 
 
 def get_container(container_id: str) -> dict:
     try:
-        c = _client.containers.get(container_id)
+        c = get_client().containers.get(container_id)
         return {"id": c.id, "name": c.name, "status": c.status}
-    except NotFound:
-        raise ContainerNotFound(container_id)
+    except NotFound as e:
+        raise ContainerNotFound(container_id) from e
     except APIError as e:
-        raise DockerOperationError(_safe_detail(e))
+        raise DockerOperationError(_safe_detail(e)) from e
 
 
 def start_container(container_id: str) -> dict:
     try:
-        c = _client.containers.get(container_id)
+        c = get_client().containers.get(container_id)
         c.start()
         c.reload()  # re-inspect so .status is current
         return {
@@ -107,15 +120,15 @@ def start_container(container_id: str) -> dict:
             "status": c.status,
             "image": _image_tag(c),
         }
-    except NotFound:
-        raise ContainerNotFound(container_id)
+    except NotFound as e:
+        raise ContainerNotFound(container_id) from e
     except APIError as e:
-        raise DockerOperationError(_safe_detail(e))
+        raise DockerOperationError(_safe_detail(e)) from e
 
 
 def stop_container(container_id: str) -> dict:
     try:
-        c = _client.containers.get(container_id)
+        c = get_client().containers.get(container_id)
         c.stop()
         c.reload()  # re-inspect so .status is current
         return {
@@ -124,21 +137,21 @@ def stop_container(container_id: str) -> dict:
             "status": c.status,
             "image": _image_tag(c),
         }
-    except NotFound:
-        raise ContainerNotFound(container_id)
+    except NotFound as e:
+        raise ContainerNotFound(container_id) from e
     except APIError as e:
-        raise DockerOperationError(_safe_detail(e))
+        raise DockerOperationError(_safe_detail(e)) from e
 
 
 def delete_container(container_id: str) -> dict:
     try:
-        c = _client.containers.get(container_id)
+        c = get_client().containers.get(container_id)
         c.remove(force=True)
         return {"id": container_id, "status": "deleted"}
-    except NotFound:
-        raise ContainerNotFound(container_id)
+    except NotFound as e:
+        raise ContainerNotFound(container_id) from e
     except APIError as e:
-        raise DockerOperationError(_safe_detail(e))
+        raise DockerOperationError(_safe_detail(e)) from e
 
 
 def deploy(image: str, name: str) -> dict:

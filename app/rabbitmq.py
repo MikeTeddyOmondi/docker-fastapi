@@ -13,6 +13,7 @@ Key fixes over the original:
     and logged instead of redelivered forever;
   * degrades gracefully — if the broker is down at startup the API still runs.
 """
+
 import asyncio
 import json
 import logging
@@ -96,9 +97,7 @@ async def publish_deploy_message(image: str, name: str) -> None:
         await channel.declare_queue(settings.deploy_queue, durable=True)
         body = json.dumps({"image": image, "name": name}).encode()
         await channel.default_exchange.publish(
-            aio_pika.Message(
-                body=body, delivery_mode=aio_pika.DeliveryMode.PERSISTENT
-            ),
+            aio_pika.Message(body=body, delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
             routing_key=settings.deploy_queue,
         )
         logger.info("Published deploy message for %s", name)

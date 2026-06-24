@@ -1,11 +1,12 @@
 """Database models and API request schemas."""
-from datetime import datetime, timezone
+
+from datetime import UTC, datetime
 
 from sqlmodel import Field, SQLModel
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Deployment(SQLModel, table=True):

@@ -6,6 +6,7 @@ into WAL mode for better read/write concurrency. Repository helpers return
 plain dicts (never live ORM objects) so callers don't trip over detached
 instances after the session closes.
 """
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path

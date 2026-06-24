@@ -54,6 +54,23 @@ just format       # ruff format .
 just check        # lint + format --check (CI-friendly)
 ```
 
+## Tests
+
+[pytest](https://docs.pytest.org/). The default suite is **hermetic** — the
+Docker layer is monkeypatched and the broker is stubbed, so no daemon or
+RabbitMQ is required. It exercises the parts the refactor is about: typed
+error → HTTP status mapping and the SQLite audit log. A separate,
+`integration`-marked test runs the real create → start → stop → delete
+lifecycle against a live daemon and auto-skips when none is reachable.
+
+```bash
+just test             # hermetic unit tests (no daemon needed)
+just test-integration # full lifecycle against Docker (defaults to Colima's socket)
+```
+
+The lazily-constructed Docker client honours `DOCKER_HOST`, so the integration
+suite can target the default socket, Colima, or a remote daemon unchanged.
+
 ## Run it
 
 ```bash
