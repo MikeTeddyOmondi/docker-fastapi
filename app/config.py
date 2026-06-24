@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     # Default port mapping applied to created containers.
     default_container_port: int = 3000
 
+    # Docker daemon endpoint. When unset, the client falls back to
+    # DockerClient.from_env() (which reads the DOCKER_HOST/TLS env vars and
+    # otherwise the default unix socket). Set this to target Colima or a remote
+    # daemon from a .env file. See .env.sample for the supported forms.
+    docker_host: str | None = None
+
     cors_origins: list[str] = [
         "http://localhost",
         "http://127.0.0.1",
