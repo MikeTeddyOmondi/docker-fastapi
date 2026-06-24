@@ -12,3 +12,6 @@ data/
 
 # Local archives
 *.tar.gz
+
+# macOS
+.DS_Store

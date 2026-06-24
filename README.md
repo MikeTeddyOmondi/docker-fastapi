@@ -11,11 +11,11 @@ SQLite as the durable history.
 ## Architecture
 
 ```
-                 ┌─────────────────────────────┐
-   HTTP client ──▶  FastAPI routes (main.py)    │
-                 │     │              │          │
-                 │     ▼              ▼          │
-                 │  docker_service   db (SQLite) │
+                 ┌────────────────────────────────┐
+   HTTP client ──▶  FastAPI routes (main.py)      │
+                 │     │              │           │
+                 │     ▼              ▼           │
+                 │  docker_service   db (SQLite)  │
                  │     │   (docker-py)  ▲         │
                  └─────┼────────────────┼─────────┘
                        ▼                │
@@ -108,19 +108,6 @@ just publish nginx:latest my-nginx
 
 The consumer then deploys the container off the event loop and writes a
 `Deployment` row with `source = "queue"`.
-
-## What was refactored from the original
-
-| Problem in the original                                   | Fix                                              |
-|-----------------------------------------------------------|--------------------------------------------------|
-| `status` returned a stale pre-operation snapshot          | `container.reload()` after start/stop            |
-| `async def` routes calling blocking docker-py             | plain `def` (threadpool)                         |
-| `e.__dict__["explanation"]` → `KeyError` masking errors   | typed `NotFound` / `APIError`, safe `getattr`    |
-| Missing container always returned 500                     | proper `404`                                     |
-| `container.container_id` (does not exist)                 | `container.id`                                   |
-| Consumer blocked the event loop / dropped failures        | `asyncio.to_thread` + explicit ack/reject        |
-| No persistence; empty `db.py`                             | SQLite (SQLModel) deployment history             |
-| Monolithic `main.py`                                      | layered routes / service / persistence modules   |
 
 ## Notes & next steps
 

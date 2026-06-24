@@ -1,0 +1,74 @@
+# Manual API smoke tests — Docker Control Plane API
+#
+# Curl requests for poking the API by hand. The service listens on 8448
+# (local: `just run`; compose: `just up` maps 8448:80).
+#
+# Usage: copy a block into your shell. `-i` prints the status line + headers so
+# you can eyeball the response code; pipe to `jq` if you have it for pretty JSON.
+#
+#   BASE=http://localhost:8448
+#   CID=<paste a container id from POST /containers>
+
+@BASE=http://localhost:8448
+@CT_ID_CREATED={{create_ct.response.body.id}}
+@DEPLOYMENT_ID=8ba2978b3b9d343ecab97428a0a1fa10e74e8aac8ce22a8b755687751dfbbf6f
+
+### --------------------------------------------------------------------------- #
+### Health — pings the Docker daemon
+### --------------------------------------------------------------------------- #
+curl {{BASE}}/health
+
+### --------------------------------------------------------------------------- #
+### Live container operations (Docker is the source of truth)
+### --------------------------------------------------------------------------- #
+
+### List all containers (running + stopped)
+curl {{BASE}}/containers
+
+### Create a container (pull + create). Returns the container id — capture it.
+# @name create_ct
+curl -i -X POST {{BASE}}/containers \
+  -H "Content-Type: application/json" \
+  -d '{"image": "nginx:latest", "name": "a01"}'
+
+### Inspect one container's live status
+curl {{BASE}}/containers/{{CT_ID_CREATED}}
+
+### Start it (status is reloaded after, so it reflects the real daemon state)
+curl -X POST "{{BASE}}/containers/{{CT_ID_CREATED}}/start"
+
+### Stop it
+curl -X POST "{{BASE}}/containers/{{CT_ID_CREATED}}/stop"
+
+### Force-remove it
+curl -X DELETE {{BASE}}/containers/{{CT_ID_CREATED}}
+
+### Unknown container -> 404
+curl -i "{{BASE}}/containers/deadbeef"
+
+### Unknown image -> 404
+curl -i -X POST {{BASE}}/containers \
+  -H "Content-Type: application/json" \
+  -d '{"image": "no-such-image:nope", "name": "bad"}'
+
+### --------------------------------------------------------------------------- #
+### Deployment history (SQLite-backed audit log — survives container removal)
+### --------------------------------------------------------------------------- #
+
+### All deployment records (most recently updated first)
+curl {{BASE}}/deployments
+
+### One deployment record (still present after the container is deleted)
+curl {{BASE}}/deployments/{{DEPLOYMENT_ID}}
+
+### Unknown deployment -> 404
+curl {{BASE}}/deployments/unknown_deployment_id
+
+# --------------------------------------------------------------------------- #
+# Async deploy via the RabbitMQ queue
+# --------------------------------------------------------------------------- #
+# There is no HTTP endpoint for this — the worker consumes the queue. Publish a
+# message with the Justfile recipe, then watch it land in /deployments:
+#
+#   just publish nginx:latest queued-web
+#   curl -i "{{BASE}}/deployments"
