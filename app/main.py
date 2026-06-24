@@ -1,107 +1,145 @@
-import asyncio
-import sys, os
-import aio_pika
+"""FastAPI control plane for Docker containers.
+
+Layering:
+  routes (this file)  ->  docker_service (Docker)  +  db (SQLite persistence)
+
+Routes are plain ``def`` (not ``async def``): docker-py is blocking, so running
+in FastAPI's threadpool keeps the event loop free for the RabbitMQ consumer.
+"""
+
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from docker import DockerClient
-from pika import BlockingConnection
-from pydantic import BaseModel
 
-from rabbitmq import consume_build_queue, rabbitmq_connection
+from . import db
+from . import docker_service as docker
+from .config import get_settings
+from .models import ContainerCreateRequest
+from .rabbitmq import shutdown_consumer, start_consumer
 
-app = FastAPI()
-docker_client = DockerClient()
+logging.basicConfig(level=logging.INFO)
+settings = get_settings()
 
-origins = [
-    "http://localhost",
-    "http://0.0.0.0",
-    "http://127.0.0.1",
-]
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.init_db()
+    consumer = await start_consumer()
+    try:
+        yield
+    finally:
+        await shutdown_consumer(consumer)
+
+
+app = FastAPI(title="Docker Control Plane API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-class ContainerCreateRequest(BaseModel):
-    image: str
-    name: str
+# --------------------------------------------------------------------------- #
+# Health
+# --------------------------------------------------------------------------- #
+@app.get("/health")
+def health():
+    docker.ping()
+    return {"status": "ok"}
 
 
-@app.post("/containers")
-async def create_container(request: ContainerCreateRequest):
+# --------------------------------------------------------------------------- #
+# Live container operations (Docker is the source of truth)
+# --------------------------------------------------------------------------- #
+@app.get("/containers")
+def list_containers():
+    return docker.list_containers()
+
+
+@app.post("/containers", status_code=201)
+def create_container(request: ContainerCreateRequest):
     try:
-        docker_client.images.pull(request.image)
-        container = docker_client.containers.create(
-            request.image, name=request.name, ports={"3000/tcp": 3000}
-        )
-        return JSONResponse(content={"id": container.id})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
+        result = docker.create_container(request.image, request.name)
+    except docker.ImageUnavailable as e:
+        raise HTTPException(status_code=404, detail=f"image not found: {e}") from e
+    except docker.DockerOperationError as e:
+        raise HTTPException(status_code=500, detail=e.message) from e
+
+    db.upsert_deployment(
+        id=result["id"],
+        name=result["name"],
+        image=result["image"],
+        status=result["status"],
+        source="api",
+    )
+    return result
 
 
 @app.get("/containers/{container_id}")
-async def get_container(container_id: str):
+def get_container(container_id: str):
     try:
-        container = docker_client.containers.get(container_id)
-        return JSONResponse(content={"id": container.id, "status": container.status})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
-
-
-@app.delete("/containers/{container_id}")
-async def delete_container(container_id: str):
-    try:
-        container = docker_client.containers.get(container_id)
-        container.remove(force=True)
-        return JSONResponse(content={"id": container_id, "status": "deleted"})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
+        return docker.get_container(container_id)
+    except docker.ContainerNotFound:
+        raise HTTPException(status_code=404, detail="container not found") from None
+    except docker.DockerOperationError as e:
+        raise HTTPException(status_code=500, detail=e.message) from e
 
 
 @app.post("/containers/{container_id}/start")
-async def start_container(container_id: str):
+def start_container(container_id: str):
     try:
-        container = docker_client.containers.get(container_id)
-        container.start()
-        return JSONResponse(content={"id": container_id, "status": container.status})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
+        result = docker.start_container(container_id)
+    except docker.ContainerNotFound:
+        raise HTTPException(status_code=404, detail="container not found") from None
+    except docker.DockerOperationError as e:
+        raise HTTPException(status_code=500, detail=e.message) from e
+
+    db.update_status(container_id, result["status"])
+    return result
 
 
 @app.post("/containers/{container_id}/stop")
-async def stop_container(container_id: str):
+def stop_container(container_id: str):
     try:
-        container = docker_client.containers.get(container_id)
-        container.stop()
-        return JSONResponse(content={"id": container_id, "status": container.status})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e.__dict__["explanation"]))
+        result = docker.stop_container(container_id)
+    except docker.ContainerNotFound:
+        raise HTTPException(status_code=404, detail="container not found") from None
+    except docker.DockerOperationError as e:
+        raise HTTPException(status_code=500, detail=e.message) from e
+
+    db.update_status(container_id, result["status"])
+    return result
 
 
-# async def main(connection: aio_pika.RobustConnection):
-#     try:
-#         await consume_build_queue(connection) 
-#         print("[*] Waiting for RabbitMQ messages...")
-#     except KeyboardInterrupt:
-#         print("Program interrupted. Exiting...")
-#         try:
-#             sys.exit(0)
-#         except SystemExit:
-#             os._exit(0)
-#     finally:
-#         connection.close()
-#         print("[*] RabbitMQ connection closed.")
+@app.delete("/containers/{container_id}")
+def delete_container(container_id: str):
+    try:
+        result = docker.delete_container(container_id)
+    except docker.ContainerNotFound:
+        raise HTTPException(status_code=404, detail="container not found") from None
+    except docker.DockerOperationError as e:
+        raise HTTPException(status_code=500, detail=e.message) from e
+
+    db.mark_deleted(container_id)
+    return result
 
 
-# if __name__ == "__main__": 
-#     loop = asyncio.get_event_loop()
-#     # main(connection)
-#     connection = rabbitmq_connection(loop)
-#     loop.run_until_complete(main(connection))
-#     loop.close()
+# --------------------------------------------------------------------------- #
+# Deployment history (SQLite-backed audit log)
+# --------------------------------------------------------------------------- #
+@app.get("/deployments")
+def list_deployments():
+    return db.list_deployments()
+
+
+@app.get("/deployments/{container_id}")
+def get_deployment(container_id: str):
+    record = db.get_deployment(container_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="deployment not found")
+    return record

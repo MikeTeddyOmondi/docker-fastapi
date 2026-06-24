@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8448:80"
+    volumes:
+      # Mount the Docker socket so the API can manage containers on the host.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist the SQLite database across restarts.
+      - ./data:/app/data
+    environment:
+      DATABASE_URL: sqlite:///./data/docker_api.db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      DEPLOY_QUEUE: locci-deploy
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
